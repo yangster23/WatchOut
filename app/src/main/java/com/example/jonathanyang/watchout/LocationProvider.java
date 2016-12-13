@@ -21,7 +21,7 @@ import com.google.android.gms.location.LocationServices;
  * Retrieves most recent Longitude and Latitude
  */
 
-public class LocationProvider implements GoogleApiClient.ConnectionCallbacks,
+public class LocationProvider extends Activity implements GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener,
         LocationListener {
 
@@ -29,18 +29,17 @@ public class LocationProvider implements GoogleApiClient.ConnectionCallbacks,
         public void handleNewLocation(Location location);
     }
 
-    public static final String TAG = LocationProvider.class.getSimpleName();
-
     // Define a request code to send to Google Play services
     // This code is returned in Activity.onActivityResult
     private final static int CONNECTION_FAILURE_RESOLUTION_REQUEST = 9000;
+    public static final String TAG = LocationProvider.class.getSimpleName();
     private static final long MIN_CHANGE_FOR_UPDATES = 1000;
+    private static final int MY_PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION = 123;
 
     private LocationCallback mLocationCallback;
     private Context mContext;
     private GoogleApiClient mGoogleApiClient;
     private LocationRequest mLocationRequest;
-
 
     public LocationProvider(Context context, LocationCallback callback) {
         if (mGoogleApiClient == null) {
@@ -55,8 +54,8 @@ public class LocationProvider implements GoogleApiClient.ConnectionCallbacks,
 
         mLocationRequest = LocationRequest.create()
                 .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
-                .setInterval(5 * MIN_CHANGE_FOR_UPDATES) // 10 seconds, in milliseconds
-                .setFastestInterval(MIN_CHANGE_FOR_UPDATES); // 1 second, in milliseconds
+                .setInterval(3 * MIN_CHANGE_FOR_UPDATES) // 10 seconds, in milliseconds
+                .setFastestInterval(1 * MIN_CHANGE_FOR_UPDATES); // 1 second, in milliseconds
 
         mContext = context;
     }
@@ -72,13 +71,19 @@ public class LocationProvider implements GoogleApiClient.ConnectionCallbacks,
         }
     }
 
-
     @Override
     public void onConnected(@Nullable Bundle bundle) {
-        Location mLastLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
-        // Regardless if previous location is not known, will constantly request location updates.
-        LocationServices.FusedLocationApi.requestLocationUpdates(mGoogleApiClient, mLocationRequest, this);
-        mLocationCallback.handleNewLocation(mLastLocation);
+        if (ActivityCompat.checkSelfPermission(mContext, android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Log.d(TAG, "ABOUT TO GO ON REQUEST");
+            ActivityCompat.requestPermissions((Activity) mContext,
+                    new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION},
+                    MY_PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION);
+        } else {
+            Location mLastLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
+            // Regardless if previous location is not known, will constantly request location updates.
+            LocationServices.FusedLocationApi.requestLocationUpdates(mGoogleApiClient, mLocationRequest, this);
+            mLocationCallback.handleNewLocation(mLastLocation);
+        }
     }
 
     @Override
@@ -96,7 +101,7 @@ public class LocationProvider implements GoogleApiClient.ConnectionCallbacks,
          */
         if (connectionResult.hasResolution() && mContext instanceof Activity) {
             try {
-                Activity activity = (Activity)mContext;
+                Activity activity = (Activity) mContext;
                 // Start an Activity that tries to resolve the error
                 connectionResult.startResolutionForResult(activity, CONNECTION_FAILURE_RESOLUTION_REQUEST);
             /*
