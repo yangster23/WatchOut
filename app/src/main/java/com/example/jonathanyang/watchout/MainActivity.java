@@ -7,6 +7,7 @@ import android.content.IntentSender;
 import android.content.pm.PackageManager;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.location.Location;
 import android.support.annotation.NonNull;
@@ -20,6 +21,7 @@ import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.cast.framework.Session;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.common.api.PendingResult;
@@ -39,7 +41,8 @@ public class MainActivity extends AppCompatActivity implements
         GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener,
         LocationListener,
-        ResultCallback<LocationSettingsResult> { // Main class for application
+        ResultCallback<LocationSettingsResult>,
+        SensorEventListener { // Main class for application
 
     // Define a request code to send to Google Play services
     // This code is returned in Activity.onActivityResult
@@ -70,6 +73,24 @@ public class MainActivity extends AppCompatActivity implements
     // Start Updates and Stop Updates buttons.
     protected Boolean mRequestingLocationUpdates;
 
+    // Provides entry point for Position Sensors
+    private SensorManager mSensorManager;
+
+    // Sensors used to get travel direction (0 - 360 degrees)
+    private Sensor mAccelerometer;
+    private Sensor mMagnetometer;
+
+    // Uses both hardware sensors to provide data for the three orientation angles
+    private float[] mAccelerometerReading;
+    private float[] mMagnetometerReading;
+
+    // Used to update orientation angles
+    private final float[] mRotationMatrix = new float[9];
+    private final float[] mOrientationAngles = new float[3];
+
+    // Gets the orientation of the phone to determine bearings in 0 to 360 degrees
+    protected int travelDirection;
+
     // Declare our UI widgets
     protected Button mStartUpdatesButton;
     protected Button mStopUpdatesButton;
@@ -98,6 +119,11 @@ public class MainActivity extends AppCompatActivity implements
         buildGoogleApiClient();
         createLocationRequest();
         buildLocationSettingRequest();
+
+        // Builds the sensors to retrieve position of device relative to earth's magnetic north pole
+        mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        mMagnetometer = mSensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
 
     }
 
@@ -140,7 +166,7 @@ public class MainActivity extends AppCompatActivity implements
 
     // Determines for the user's permission to modify location settings
     @Override
-    public void onResult(LocationSettingsResult locationSettingsResult) {
+    public void onResult(@NonNull LocationSettingsResult locationSettingsResult) {
         final Status status = locationSettingsResult.getStatus();
         switch (status.getStatusCode()) {
             case LocationSettingsStatusCodes.SUCCESS:
@@ -196,7 +222,7 @@ public class MainActivity extends AppCompatActivity implements
                 this
         ).setResultCallback(new ResultCallback<Status>() {
             @Override
-            public void onResult(Status status) {
+            public void onResult(@NonNull Status status) {
                 mRequestingLocationUpdates = true;
                 setButtonsEnabledState();
             }
@@ -239,7 +265,6 @@ public class MainActivity extends AppCompatActivity implements
         stopLocationUpdates();
     }
 
-
     /**
      * Disables both buttons when functionality is disabled due to insufficient location settings.
      * Otherwise ensures that only one button is enabled at any time. The Start Updates button is
@@ -256,8 +281,6 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
-
-
     @Override
     protected void onStart() {
         mGoogleApiClient.connect();
@@ -273,6 +296,9 @@ public class MainActivity extends AppCompatActivity implements
         if (mGoogleApiClient.isConnected() && mRequestingLocationUpdates) {
             startLocationUpdates();
         }
+        // Get updates from accelerometer at a constant rate.
+        mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
+        mSensorManager.registerListener(this, mMagnetometer, SensorManager.SENSOR_DELAY_NORMAL);
     }
 
     @Override
@@ -282,6 +308,9 @@ public class MainActivity extends AppCompatActivity implements
         if (mGoogleApiClient.isConnected()) {
             stopLocationUpdates();
         }
+
+        // Don't receive any more updates from either the magnetometer or accelerometer
+        mSensorManager.unregisterListener(this);
     }
 
 
@@ -323,19 +352,6 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
-    // In case location.getSpeed() results in null
-    private static long calculateDistance(double lat1, double lng1, double lat2, double lng2) {
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLon = Math.toRadians(lng2 - lng1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
-                + Math.cos(Math.toRadians(lat1))
-                * Math.cos(Math.toRadians(lat2)) * Math.sin(dLon / 2)
-                * Math.sin(dLon / 2);
-        double c = 2 * Math.asin(Math.sqrt(a));
-        long distanceInMeters = Math.round(6371000 * c);
-        return distanceInMeters;
-    }
-
     @Override
     public void onRequestPermissionsResult(int requestCode,
                                            @NonNull String permissions[],
@@ -373,4 +389,42 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
+    // Get readings from accelerometer and magnetometer. To simplify calculations, consider
+    // storing these readings as unit vectors. May need to convert to X and Y components for collision
+    @Override
+    public void onSensorChanged(SensorEvent sensorEvent) {
+        if (sensorEvent.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+            mAccelerometerReading = sensorEvent.values;
+        }
+        else if (sensorEvent.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
+            mMagnetometerReading = sensorEvent.values;
+        }
+
+        // Calculate orientation
+        if (mAccelerometerReading != null && mMagnetometerReading != null) {
+            updateOrientationAngles();
+        }
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int i) {
+        // If sensor accuracy changes, do something here. Need to implement callback in code.
+    }
+
+    // Compute the three orientation angles based on most recent readings from sensors.
+    public void updateOrientationAngles() {
+        // Update rotation matrix, which is needed to update orientation angles
+        boolean success = SensorManager.getRotationMatrix(mRotationMatrix, null,
+                mAccelerometerReading, mMagnetometerReading);
+
+        // mRotationMatrix now has up-to-date info.
+        if (success) {
+            SensorManager.getOrientation(mRotationMatrix, mOrientationAngles);
+            // mOrientationAngles now has up-to-date of 3 angles.
+            float azimuthInRadians = mOrientationAngles[0];
+            // converts from -180 to 180 degrees to 0-360 degrees
+            travelDirection = (int)(Math.toDegrees(azimuthInRadians)+360)%360;
+            Log.i(TAG, travelDirection + " degrees in 360");
+        }
+    }
 }
