@@ -1,8 +1,10 @@
 package com.example.jonathanyang.watchout;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
 import android.hardware.Sensor;
@@ -10,11 +12,19 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.location.Location;
+import android.net.wifi.p2p.WifiP2pConfig;
+import android.net.wifi.p2p.WifiP2pDevice;
+import android.net.wifi.p2p.WifiP2pManager;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Message;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.LocalBroadcastManager;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -34,6 +44,7 @@ import com.google.android.gms.location.LocationSettingsRequest;
 import com.google.android.gms.location.LocationSettingsResult;
 import com.google.android.gms.location.LocationSettingsStatusCodes;
 
+import java.net.InetAddress;
 import java.text.DateFormat;
 import java.util.Date;
 
@@ -91,6 +102,73 @@ public class MainActivity extends AppCompatActivity implements
     // Gets the orientation of the phone to determine bearings in 0 to 360 degrees
     protected int travelDirection;
 
+    public static final String SERVICE_TYPE = "_wdm_p2p._tcp";
+
+    protected MainActivity that = this;
+
+    protected TextSpeech mySpeech = null;
+
+    protected MainBroadcastReceiver mainReceiver;
+    private IntentFilter filter;
+
+    // current config is 1 sec, can be changed if needed
+    private int mInterval = 1000;
+
+    private Handler timeHandler;
+    private int timeCounter;
+    Runnable mStatusChecker = new Runnable() {
+        @Override
+        public void run() {
+            // call function to update timer
+            timeCounter = timeCounter + 1;
+            ((TextView) findViewById(R.id.TimeBox)).setText("T: " + timeCounter);
+            timeHandler.postDelayed(mStatusChecker, mInterval);
+        }
+    };
+
+    WiFiServiceSearcher mWifiServiceSearcher = null;
+    WiFiAccessPoint mWifiAccessPoint = null;
+    WiFiConnection mWifiConnection = null;
+    boolean serviceRunning = false;
+
+    //change me to be dynamic!!
+    public String CLIENT_PORT_INSTANCE = "38765";
+    public String SERVICE_PORT_INSTANCE = "38765";
+
+    public static final int MESSAGE_READ = 0x400 + 1;
+    public static final int MY_HANDLE = 0x400 + 2;
+
+
+    GroupOwnerSocketHandler groupSocket = null;
+    ClientSocketHandler clientSocket = null;
+    ChatManager chat = null;
+    Handler myHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case MESSAGE_READ:
+
+                    byte[] readBuf = (byte[]) msg.obj;
+
+                    String readMessage = new String(readBuf, 0, msg.arg1);
+
+                    print_line("", "Got message: " + readMessage);
+
+                    mySpeech.speak(readMessage);
+                    break;
+
+                case MY_HANDLE:
+                    Object obj = msg.obj;
+                    chat = (ChatManager) obj;
+
+                    String helloBuffer = "Hello There from " + chat.getIdentity() + " :" + Build.VERSION.SDK_INT;
+
+                    chat.write(helloBuffer.getBytes());
+                    print_line("", "Wrote message: " + helloBuffer);
+            }
+        }
+    };
+
     // Declare our UI widgets
     protected Button mStartUpdatesButton;
     protected Button mStopUpdatesButton;
@@ -121,10 +199,112 @@ public class MainActivity extends AppCompatActivity implements
         buildLocationSettingRequest();
 
         // Builds the sensors to retrieve position of device relative to earth's magnetic north pole
-        mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-        mMagnetometer = mSensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+        buildSensors();
 
+        mySpeech = new TextSpeech(this);
+
+        Button showIPButton = (Button) findViewById(R.id.button3);
+        showIPButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                WiFiP2PHelper.printLocalIpAddresses(that);
+            }
+        });
+
+        Button clearButton = (Button) findViewById(R.id.button2);
+        clearButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ((TextView) findViewById(R.id.debugdataBox)).setText("");
+            }
+        });
+
+        Button toggleButton = (Button) findViewById(R.id.buttonToggle);
+        toggleButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (serviceRunning) { // we elect to turn off the WiFi direct process
+                    serviceRunning = false;
+                    if (mWifiAccessPoint != null) {
+                        mWifiAccessPoint.stop();
+                        mWifiAccessPoint = null;
+                    }
+
+                    if (mWifiServiceSearcher != null) {
+                        mWifiServiceSearcher.stop();
+                        mWifiServiceSearcher = null;
+                    }
+
+                    if (mWifiConnection != null) {
+                        mWifiConnection.stop();
+                        mWifiConnection = null;
+                    }
+                    print_line("", "Stopped");
+                } else { // Process has been turned on
+                    serviceRunning = true;
+                    print_line("", "Started");
+
+                    mWifiAccessPoint = new WiFiAccessPoint(that);
+                    mWifiAccessPoint.start();
+
+                    mWifiServiceSearcher = new WiFiServiceSearcher(that);
+                    mWifiServiceSearcher.start();
+                }
+            }
+        });
+
+        mainReceiver = new MainBroadcastReceiver();
+        filter = new IntentFilter();
+        filter.addAction(WiFiAccessPoint.DSS_WIFIAP_VALUES);
+        filter.addAction(WiFiAccessPoint.DSS_WIFIAP_SERVERADDRESS);
+        filter.addAction(WiFiServiceSearcher.DSS_WIFISS_PEERAPINFO);
+        filter.addAction(WiFiServiceSearcher.DSS_WIFISS_PEERCOUNT);
+        filter.addAction(WiFiServiceSearcher.DSS_WIFISS_VALUES);
+        filter.addAction(WiFiConnection.DSS_WIFICON_VALUES);
+        filter.addAction(WiFiConnection.DSS_WIFICON_STATUSVAL);
+        filter.addAction(WiFiConnection.DSS_WIFICON_SERVERADDRESS);
+        filter.addAction(ClientSocketHandler.DSS_CLIENT_VALUES);
+        filter.addAction(GroupOwnerSocketHandler.DSS_GROUP_VALUES);
+
+        LocalBroadcastManager.getInstance(this).registerReceiver((mainReceiver), filter);
+
+        try {
+            groupSocket = new GroupOwnerSocketHandler(myHandler,
+                    Integer.parseInt(SERVICE_PORT_INSTANCE), this);
+            groupSocket.start();
+            print_line("", "Group socketserver started.");
+        } catch (Exception e) {
+            print_line("", "groupseocket error, :" + e.toString());
+        }
+        timeHandler = new Handler();
+        mStatusChecker.run();
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mWifiConnection != null) {
+            mWifiConnection.stop();
+            mWifiConnection = null;
+        }
+        if (mWifiAccessPoint != null) {
+            mWifiAccessPoint.stop();
+            mWifiAccessPoint = null;
+        }
+
+        if (mWifiServiceSearcher != null) {
+            mWifiServiceSearcher.stop();
+            mWifiServiceSearcher = null;
+        }
+
+        timeHandler.removeCallbacks(mStatusChecker);
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(mainReceiver);
+    }
+
+    // Prints the time of each process
+    public void print_line(String who, String line) {
+        timeCounter = 0;
+        ((TextView)findViewById(R.id.debugdataBox)).append(who + " : " + line + "\n");
     }
 
     // Builds Google Api Client
@@ -230,7 +410,7 @@ public class MainActivity extends AppCompatActivity implements
 
     }
 
-     // Removes location updates from the FusedLocationApi.
+    // Removes location updates from the FusedLocationApi.
     protected void stopLocationUpdates() {
         // It is a good practice to remove location requests when the activity is in a paused or
         // stopped state. Doing so helps battery performance and is especially
@@ -290,6 +470,8 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public void onResume() {
         super.onResume();
+
+
         // Within {@code onPause()}, we pause location updates, but leave the
         // connection to GoogleApiClient intact.  Here, we resume receiving
         // location updates if the user has requested them.
@@ -304,6 +486,7 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     protected void onPause() {
         super.onPause();
+
         // Stop location updates to save battery, but don't disconnect the GoogleApiClient object.
         if (mGoogleApiClient.isConnected()) {
             stopLocationUpdates();
@@ -319,7 +502,6 @@ public class MainActivity extends AppCompatActivity implements
         mGoogleApiClient.disconnect();
         super.onStop();
     }
-
 
     @Override
     public void onConnected(@Nullable Bundle bundle) {
@@ -389,14 +571,20 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
+    // Sensor Manager and two hardware sensors created
+    protected void buildSensors() {
+        mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        mMagnetometer = mSensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+    }
+
     // Get readings from accelerometer and magnetometer. To simplify calculations, consider
     // storing these readings as unit vectors. May need to convert to X and Y components for collision
     @Override
     public void onSensorChanged(SensorEvent sensorEvent) {
         if (sensorEvent.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
             mAccelerometerReading = sensorEvent.values;
-        }
-        else if (sensorEvent.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
+        } else if (sensorEvent.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
             mMagnetometerReading = sensorEvent.values;
         }
 
@@ -423,8 +611,121 @@ public class MainActivity extends AppCompatActivity implements
             // mOrientationAngles now has up-to-date of 3 angles.
             float azimuthInRadians = mOrientationAngles[0];
             // converts from -180 to 180 degrees to 0-360 degrees
-            travelDirection = (int)(Math.toDegrees(azimuthInRadians)+360)%360;
+            travelDirection = (int) (Math.toDegrees(azimuthInRadians) + 360) % 360;
             Log.i(TAG, travelDirection + " degrees in 360");
+        }
+    }
+
+
+    private class MainBroadcastReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+
+            if (WiFiAccessPoint.DSS_WIFIAP_VALUES.equals(action)) {
+                String s = intent.getStringExtra(WiFiAccessPoint.DSS_WIFIAP_MESSAGE);
+                print_line("AP", s);
+
+            } else if (WiFiAccessPoint.DSS_WIFIAP_SERVERADDRESS.equals(action)) {
+                InetAddress address = (InetAddress)intent.getSerializableExtra(WiFiAccessPoint.DSS_WIFIAP_INETADDRESS);
+                print_line("AP", "inet address" + address.getHostAddress());
+
+            } else if (WiFiServiceSearcher.DSS_WIFISS_VALUES.equals(action)) {
+                String s = intent.getStringExtra(WiFiServiceSearcher.DSS_WIFISS_MESSAGE);
+                print_line("SS", s);
+
+            } else if (WiFiServiceSearcher.DSS_WIFISS_PEERCOUNT.equals(action)) {
+                int s = intent.getIntExtra(WiFiServiceSearcher.DSS_WIFISS_COUNT, -1);
+                print_line("SS", "found " + s + " peers");
+                mySpeech.speak(s+ " peers discovered.");
+
+            } else if (WiFiServiceSearcher.DSS_WIFISS_PEERAPINFO.equals(action)) {
+                String s = intent.getStringExtra(WiFiServiceSearcher.DSS_WIFISS_INFOTEXT);
+
+                String[] separated = s.split(":");
+                print_line("SS", "found SSID:" + separated[1] + ", pwd:"  + separated[2]+ "IP: " + separated[3]);
+
+                if(mWifiConnection == null) {
+                    if(mWifiAccessPoint != null){
+                        mWifiAccessPoint.stop();
+                        mWifiAccessPoint = null;
+                    }
+                    if(mWifiServiceSearcher != null){
+                        mWifiServiceSearcher.stop();
+                        mWifiServiceSearcher = null;
+                    }
+
+                    final String networkSSID = separated[1];
+                    final String networkPass = separated[2];
+                    final String ipAddress = separated[3];
+
+                    mWifiConnection = new WiFiConnection(that,networkSSID,networkPass);
+                    mWifiConnection.setInetAddress(ipAddress);
+                    mySpeech.speak("found accesspoint");
+                }
+            } else if (WiFiConnection.DSS_WIFICON_VALUES.equals(action)) {
+                String s = intent.getStringExtra(WiFiConnection.DSS_WIFICON_MESSAGE);
+                print_line("CON", s);
+
+            } else if (WiFiConnection.DSS_WIFICON_SERVERADDRESS.equals(action)) {
+                int addr = intent.getIntExtra(WiFiConnection.DSS_WIFICON_INETADDRESS, -1);
+                print_line("COM", "IP" + Formatter.formatIpAddress(addr));
+
+                if (clientSocket == null &&  mWifiConnection != null) {
+                    String IpToConnect = mWifiConnection.getInetAddress();
+                    print_line("","Starting client socket connection to : " + IpToConnect);
+                    clientSocket = new ClientSocketHandler(myHandler,IpToConnect, Integer.parseInt(CLIENT_PORT_INSTANCE), that);
+                    clientSocket.start();
+                }
+            } else if (WiFiConnection.DSS_WIFICON_STATUSVAL.equals(action)) {
+                int status = intent.getIntExtra(WiFiConnection.DSS_WIFICON_CONSTATUS, -1);
+
+                String conStatus = "";
+                if(status == WiFiConnection.CONNECTION_STATE_NONE) {
+                    conStatus = "NONE";
+                }else if(status == WiFiConnection.CONNECTION_STATE_PRECONNECTION) {
+                    conStatus = "PreConnecting";
+                }else if(status == WiFiConnection.CONNECTION_STATE_CONNECTING) {
+                    conStatus = "Connecting";
+                    mySpeech.speak("Accesspoint connected");
+                }else if(status == WiFiConnection.CONNECTION_STATE_CONNECTED) {
+                    conStatus = "Connected";
+                }else if(status == WiFiConnection.CONNECTION_STATE_DISCONNECTED) {
+                    conStatus = "Disconnected";
+                    mySpeech.speak("Accesspoint Disconnected");
+                    if(mWifiConnection != null) {
+                        mWifiConnection.stop();
+                        mWifiConnection = null;
+                        // should stop
+                        clientSocket = null;
+                    }
+                    // make sure services are re-started
+                    if(mWifiAccessPoint != null){
+                        mWifiAccessPoint.stop();
+                        mWifiAccessPoint = null;
+                    }
+                    mWifiAccessPoint = new WiFiAccessPoint(that);
+                    mWifiAccessPoint.start();
+
+                    if(mWifiServiceSearcher != null){
+                        mWifiServiceSearcher.stop();
+                        mWifiServiceSearcher = null;
+                    }
+
+                    mWifiServiceSearcher = new WiFiServiceSearcher(that);
+                    mWifiServiceSearcher.start();
+                }
+
+                print_line("COM", "Status " + conStatus);
+            }else if (ClientSocketHandler.DSS_CLIENT_VALUES.equals(action)) {
+                String s = intent.getStringExtra(ClientSocketHandler.DSS_CLIENT_MESSAGE);
+                print_line("Client", s);
+
+            }else if (GroupOwnerSocketHandler.DSS_GROUP_VALUES.equals(action)) {
+                String s = intent.getStringExtra(GroupOwnerSocketHandler.DSS_GROUP_MESSAGE);
+                print_line("Group", s);
+
+            }
         }
     }
 }
