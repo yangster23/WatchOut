@@ -169,6 +169,12 @@ public class MainActivity extends AppCompatActivity implements
         }
     };
 
+    protected CollisionDetection collisionDetector;
+    protected CollisionObject collisionObject;
+    protected double collisionLongitude;
+    protected double collisionLatitude;
+    protected double collisionSpeed;
+
     // Declare our UI widgets
     protected Button mStartUpdatesButton;
     protected Button mStopUpdatesButton;
@@ -176,6 +182,7 @@ public class MainActivity extends AppCompatActivity implements
     protected TextView mLatitudeView;
     protected TextView mLastUpdateView;
     protected TextView mSpeedView;
+    protected TextView mTravelDirectionView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -189,6 +196,7 @@ public class MainActivity extends AppCompatActivity implements
         mLatitudeView = (TextView) findViewById(R.id.latitudeView);
         mLastUpdateView = (TextView) findViewById(R.id.lastUpdateView);
         mSpeedView = (TextView) findViewById(R.id.speedView);
+        mTravelDirectionView = (TextView) findViewById(R.id.travelDirectionView);
 
         mRequestingLocationUpdates = false;
 
@@ -278,6 +286,7 @@ public class MainActivity extends AppCompatActivity implements
         }
         timeHandler = new Handler();
         mStatusChecker.run();
+        collisionDetector = new CollisionDetection();
     }
 
     @Override
@@ -524,13 +533,16 @@ public class MainActivity extends AppCompatActivity implements
     // Retrieves the location values
     public void handleNewLocation(Location location) {
         if (location != null) {
-            Log.d(TAG, location.toString());
-            mLongitudeView.setText(String.valueOf(location.getLatitude()));
-            mLatitudeView.setText(String.valueOf(location.getLongitude()));
+            //Log.d(TAG, location.toString());
+            collisionLongitude = location.getLongitude();
+            collisionLatitude = location.getLatitude();
+            collisionSpeed = location.getSpeed();
+            mLatitudeView.setText(String.valueOf(collisionLatitude));
+            mLongitudeView.setText(String.valueOf(collisionLongitude));
             mLastUpdateView.setText(DateFormat.getTimeInstance().format(new Date()));
-            String speed = String.valueOf(location.getSpeed()) + " meters/sec";
+            String speed = String.valueOf(collisionSpeed) + " meters/sec";
             mSpeedView.setText(speed);
-            Log.d(TAG, String.valueOf(location.getSpeed()));
+            // Log.d(TAG, String.valueOf(collisionSpeed));
         }
     }
 
@@ -582,6 +594,15 @@ public class MainActivity extends AppCompatActivity implements
     // storing these readings as unit vectors. May need to convert to X and Y components for collision
     @Override
     public void onSensorChanged(SensorEvent sensorEvent) {
+        handleNewTravelDirection(sensorEvent);
+        collisionObject = new CollisionObject(collisionLongitude, collisionLatitude,
+                collisionSpeed, travelDirection);
+        CollisionObject two = new CollisionObject(-82.4933965, 35.4550969, 2, 193);
+        Log.d(TAG, collisionLongitude + " " + " " + collisionLatitude + " " + collisionSpeed + " " + travelDirection);
+        collisionDetector.checkCollision(collisionObject, two);
+    }
+
+    public void handleNewTravelDirection(SensorEvent sensorEvent) {
         if (sensorEvent.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
             mAccelerometerReading = sensorEvent.values;
         } else if (sensorEvent.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
@@ -612,7 +633,8 @@ public class MainActivity extends AppCompatActivity implements
             float azimuthInRadians = mOrientationAngles[0];
             // converts from -180 to 180 degrees to 0-360 degrees
             travelDirection = (int) (Math.toDegrees(azimuthInRadians) + 360) % 360;
-            Log.i(TAG, travelDirection + " degrees in 360");
+            //Log.i(TAG, travelDirection + " degrees in 360");
+            mTravelDirectionView.setText(String.valueOf(travelDirection));
         }
     }
 

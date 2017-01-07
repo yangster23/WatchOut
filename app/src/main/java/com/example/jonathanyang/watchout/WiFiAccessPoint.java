@@ -11,11 +11,7 @@ import android.net.wifi.p2p.WifiP2pInfo;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo;
 import android.support.v4.content.LocalBroadcastManager;
-
-import java.io.Serializable;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 import static android.net.wifi.p2p.WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION;
 import static android.net.wifi.p2p.WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION;
@@ -208,7 +204,7 @@ public class WiFiAccessPoint implements WifiP2pManager.ConnectionInfoListener,
                 if (networkInfo.isConnected()) {
                     debug_print("We are connected, will check info now");
                     p2p.requestConnectionInfo(channel, that);
-                } else{
+                } else {
                     debug_print("We are DIS-connected");
                 }
             }
