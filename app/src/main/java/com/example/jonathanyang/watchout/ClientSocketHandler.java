@@ -1,32 +1,32 @@
 package com.example.jonathanyang.watchout;
 
 import android.content.Context;
-import android.content.Intent;
 import android.os.Handler;
 import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
 
+import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
 /**
  * Necessary to handle a socket for the client of the P2P connection,
- * derived from WiFiDirectServiceDiscovery Demo from Google Samples and MyWifiMesh from DrJukka
+ * derived from WiFiDirectServiceDiscovery Demo from Google Samples
  */
 
 public class ClientSocketHandler extends Thread {
 
-    static final public String DSS_CLIENT_VALUES = "com.example.jonathanyang.watchout.DSS_CLIENT_VALUES";
-    static final public String DSS_CLIENT_MESSAGE = "com.example.jonathanyang.watchout.DSS_CLIENT_MESSAGE";
-
-    LocalBroadcastManager broadcaster;
+    private static final int SOCKET_TIMEOUT = 5000; // Amount of timeout for socket
     private static final String TAG = "ClientSocketHandler";
+    LocalBroadcastManager broadcaster;
     private Handler handler;
     private ChatManager chat;
-    private String mAddress;
+    private InetAddress mAddress;
     private int mPort;
 
-    public ClientSocketHandler(Handler handler, String groupOwnerAddress, int port, Context context) {
+    public ClientSocketHandler(Handler handler, InetAddress groupOwnerAddress, int port,
+                               Context context) {
         this.broadcaster = LocalBroadcastManager.getInstance(context);
         this.handler = handler;
         this.mAddress = groupOwnerAddress;
@@ -38,33 +38,19 @@ public class ClientSocketHandler extends Thread {
         Socket socket = new Socket();
         try {
             socket.bind(null);
-            socket.connect(new InetSocketAddress(mAddress, mPort), 5000);
-            Log.d(TAG, "Launching the I/O handler of the client");
-            chat = new ChatManager(socket, handler, "Client");
+            socket.connect(new InetSocketAddress(mAddress.getHostAddress(), mPort), SOCKET_TIMEOUT);
+            Log.d(TAG, "Launching the I/O handler");
+            chat = new ChatManager(socket, handler);
             new Thread(chat).start();
-        } catch (Exception e) { // handles exception
-            if (broadcaster != null) {
-                Intent intent = new Intent(DSS_CLIENT_VALUES);
-                intent.putExtra(DSS_CLIENT_MESSAGE, e.toString());
-                broadcaster.sendBroadcast(intent);
-                ;
-            }
+        } catch (IOException e) {
+            e.printStackTrace();
             try {
                 socket.close();
-            } catch (Exception e1) {
-                if (broadcaster != null) {
-                    Intent intent = new Intent(DSS_CLIENT_VALUES);
-                    intent.putExtra(DSS_CLIENT_MESSAGE, e.toString());
-                    broadcaster.sendBroadcast(intent);
-                }
+            } catch (IOException e1) {
+                e1.printStackTrace();
             }
             return;
         }
-
     }
 
-    // Retrieves the chat handler
-    public ChatManager getChat() {
-        return chat;
-    }
 }

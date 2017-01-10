@@ -18,12 +18,10 @@ public class ChatManager implements Runnable {
 
     private Socket socket = null;
     private Handler handler;
-    String identity; // determines if either Client or Group Owner
 
-    public ChatManager(Socket socket, Handler handler, String whichUser) {
+    public ChatManager(Socket socket, Handler handler) {
         this.socket = socket;
         this.handler = handler;
-        this.identity = whichUser;
     }
 
     private InputStream iStream;
@@ -72,9 +70,5 @@ public class ChatManager implements Runnable {
         } catch (IOException e) {
             Log.e(TAG, "Exception during write", e);
         }
-    }
-
-    String getIdentity(){
-        return this.identity;
     }
 }

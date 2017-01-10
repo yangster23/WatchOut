@@ -25,12 +25,12 @@ public class CollisionObject {
     public CollisionObject(double longitude, double latitude, double speed, double directionAngle) {
         // is this necessary at all to convert the longitude and latitude;
         x0 = longitude * Math.PI / 180;
-        Log.d(MainActivity.TAG, "LONGITUDE: " + x0 + " " + longitude);
+       // Log.d(MainActivity.TAG, "LONGITUDE: " + x0 + " " + longitude);
         y0 = Math.log(Math.tan(QUARTER_PI + 0.5 * (latitude * Math.PI / 180)));
-        Log.d(MainActivity.TAG, "LATITUDE:" + y0 + " " + latitude);
+        //Log.d(MainActivity.TAG, "LATITUDE:" + y0 + " " + latitude);
         xt = speed * Math.cos(directionAngle);
         yt = speed * Math.sin(directionAngle);
-        Log.d(MainActivity.TAG, "XVECTOR: " + xt + " YVECTOR: " + yt);
+        //Log.d(MainActivity.TAG, "XVECTOR: " + xt + " YVECTOR: " + yt);
     }
 }
 
